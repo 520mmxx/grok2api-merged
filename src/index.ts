@@ -22,7 +22,7 @@ async function bootstrapProxyPool(env: Env): Promise<void> {
     if (urlsRaw) {
       const urls = urlsRaw.split(",").map((u) => u.trim()).filter(Boolean);
       for (const url of urls) {
-        const result = pool.addProxy(url);
+        const result = await pool.addProxy(url);
         if (result.success) {
           // Reset health for env-var proxies (they should always start healthy)
           await pool.resetHealth(url);

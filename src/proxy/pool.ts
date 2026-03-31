@@ -122,14 +122,14 @@ export class ProxyPool {
     await dbRun(this.env.DB, "DELETE FROM proxy_sso_bindings WHERE sso = ?", [sso]);
   }
 
-  addProxy(url: string): { success: boolean; message: string } {
+  async addProxy(url: string): Promise<{ success: boolean; message: string }> {
     const n = normalizeProxy(url);
     if (!n || !validateProxy(n)) return { success: false, message: "代理格式无效" };
     if (this.proxies.has(n)) return { success: true, message: "代理已存在" };
     const info: ProxyInfo = { url: n, healthy: true, fail_count: 0, last_used: 0, assigned_sso: [], total_requests: 0, success_requests: 0 };
     this.proxies.set(n, info);
-    void this._persistD1(info);
-    void this._persist();
+    await this._persistD1(info);
+    await this._persist();
     return { success: true, message: "代理添加成功" };
   }
 
@@ -179,12 +179,12 @@ export class ProxyPool {
       if (p && p.healthy) return url;
       await this.unassignFromSso(sso);
     }
-    const sel = this._selectRoundRobin();
+    const sel = await this._selectRoundRobin();
     if (sso && sel) await this.assignToSso(sel, sso);
     return sel;
   }
 
-  private _selectRoundRobin(): string | null {
+  private async _selectRoundRobin(): Promise<string | null> {
     const healthy = [...this.proxies.values()].filter((p) => p.healthy);
     if (!healthy.length) return null;
     this.round_robin_index = this.round_robin_index % healthy.length;
@@ -193,8 +193,8 @@ export class ProxyPool {
     const p = this.proxies.get(sel)!;
     p.last_used = nowMs();
     p.total_requests++;
-    void this._persistD1(p);
-    void this._persist();
+    await this._persistD1(p);
+    await this._persist();
     return sel;
   }
 
@@ -204,7 +204,7 @@ export class ProxyPool {
     return h[Math.floor(Math.random() * h.length)]!.url;
   }
 
-  forceRefresh(): string | null { return this._selectRoundRobin(); }
+  async forceRefresh(): Promise<string | null> { return await this._selectRoundRobin(); }
 
   async markFailure(proxyUrl: string): Promise<void> {
     const n = normalizeProxy(proxyUrl);

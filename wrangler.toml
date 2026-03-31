@@ -47,7 +47,7 @@ KV_CLEANUP_BATCH = "200"
 
 # Proxy pool: comma-separated proxy URLs for quick bootstrap (e.g. "http://ip1:port,http://ip2:port")
 # Supports http://, https://, socks5://, socks5h:// schemes
-PROXY_URLS = "socks5h://ygli62559-region-US-st-California-sid-4TKdfn3r-t-15:mm000852@us.lajiaohttp.net:2000"
+PROXY_URLS = ""
 
 # Proxy pool: external pool API URL for dynamic proxy fetching (returns a single proxy URL per call)
 PROXY_POOL_URL = ""

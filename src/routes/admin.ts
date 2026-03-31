@@ -1608,7 +1608,7 @@ adminRoutes.post("/api/v1/admin/proxies", requireAdminAuth, async (c) => {
     let added = 0;
     const errors: string[] = [];
     for (const url of urls) {
-      const result = pool.addProxy(url);
+      const result = await pool.addProxy(url);
       if (result.success) added++;
       else errors.push(`${url}: ${result.message}`);
     }

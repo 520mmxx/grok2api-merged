@@ -14,11 +14,11 @@ CREATE TABLE IF NOT EXISTS proxy_pool (
 
 CREATE INDEX IF NOT EXISTS idx_proxy_pool_healthy ON proxy_pool(healthy);
 
+-- No foreign key constraint - in-memory pool manages consistency
 CREATE TABLE IF NOT EXISTS proxy_sso_bindings (
   sso TEXT PRIMARY KEY,
   proxy_url TEXT NOT NULL,
-  bound_at INTEGER NOT NULL,
-  FOREIGN KEY (proxy_url) REFERENCES proxy_pool(url) ON DELETE CASCADE
+  bound_at INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_proxy_sso_bindings_url ON proxy_sso_bindings(proxy_url);
