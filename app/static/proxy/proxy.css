@@ -1,0 +1,48 @@
+/* Proxy management styles */
+.proxy-url-cell {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+.sso-badge {
+  display: inline-block;
+  background: rgba(123, 47, 247, 0.08);
+  color: #7b2ff7;
+  border: 1px solid rgba(123, 47, 247, 0.15);
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  margin: 2px 2px;
+}
+.sso-badge .unbind-btn {
+  cursor: pointer;
+  margin-left: 4px;
+  opacity: 0.5;
+}
+.sso-badge .unbind-btn:hover {
+  opacity: 1;
+  color: #ef4444;
+}
+.health-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+}
+.health-dot.healthy { background: #22c55e; }
+.health-dot.unhealthy { background: #ef4444; }
+.rate-bar {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.rate-high { background: rgba(34,197,94,0.1); color: #16a34a; }
+.rate-mid { background: rgba(234,179,8,0.1); color: #ca8a04; }
+.rate-low { background: rgba(239,68,68,0.1); color: #dc2626; }

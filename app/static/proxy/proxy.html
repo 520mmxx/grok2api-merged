@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grok2API - 代理管理</title>
+  <link rel="icon" href="/static/favicon/favicon.ico">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-sans/style.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-mono/style.css" rel="stylesheet">
+  <link href="/static/common/common.css?v=3" rel="stylesheet">
+  <link href="/static/proxy/proxy.css?v=1" rel="stylesheet">
+  <link href="/static/common/toast.css" rel="stylesheet">
+</head>
+
+<body class="min-h-screen flex flex-col" style="background-color: var(--bg);">
+  <div id="toast-container" class="toast-container"></div>
+  <div id="app-header"></div>
+
+  <main class="space-y-6 flex-1 container mx-auto max-w-4xl px-6 py-8 fade-in">
+    <div class="space-y-6">
+      <div class="flex flex-wrap justify-between items-start gap-3">
+        <div>
+          <h2 class="text-2xl font-semibold tracking-tight">代理管理</h2>
+          <p class="text-[var(--accents-4)] mt-1 text-sm">管理 IP 地址池代理，支持 SSO 绑定、健康检查、失败熔断。</p>
+        </div>
+        <div class="flex items-center gap-3 w-full sm:w-auto">
+          <button onclick="resetHealth()" class="geist-button-outline gap-2">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <polyline points="1 20 1 14 7 14"></polyline>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
+            重置健康
+          </button>
+          <button onclick="openAddModal()" class="geist-button gap-2">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+            添加代理
+          </button>
+        </div>
+      </div>
+
+      <div class="h-px bg-[var(--border)] my-6"></div>
+
+      <!-- Statistics -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6" id="stats-container">
+        <div class="stat-card">
+          <div class="stat-value" id="stat-total">-</div>
+          <div class="stat-label">代理总数</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value text-green-600" id="stat-healthy">-</div>
+          <div class="stat-label">健康</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value text-red-600" id="stat-unhealthy">-</div>
+          <div class="stat-label">不健康</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value text-blue-600" id="stat-bindings">-</div>
+          <div class="stat-label">SSO 绑定数</div>
+        </div>
+      </div>
+
+      <!-- Proxy Table -->
+      <div class="rounded-lg overflow-hidden bg-white mb-4 overflow-x-auto">
+        <table class="geist-table min-w-[700px]">
+          <thead>
+            <tr>
+              <th class="text-left">代理地址</th>
+              <th class="w-20">状态</th>
+              <th class="w-20">失败数</th>
+              <th class="w-24">成功率</th>
+              <th class="w-24">总请求</th>
+              <th class="text-left">绑定的 SSO</th>
+              <th class="w-32 text-center">操作</th>
+            </tr>
+          </thead>
+          <tbody id="proxy-table-body">
+          </tbody>
+        </table>
+        <div id="loading" class="text-center py-12 text-[var(--accents-4)]">加载中...</div>
+        <div id="empty-state" class="hidden text-center py-12 text-[var(--accents-4)]">
+          暂无代理，请点击右上角添加。
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Add Proxy Modal -->
+  <div id="add-modal" class="modal-overlay hidden">
+    <div class="modal-content modal-lg" id="add-modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">添加代理</h3>
+        <button onclick="closeAddModal()" class="modal-close">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="space-y-4">
+        <div>
+          <label class="modal-label mb-1 block">代理 URL（每行一个，支持批量）</label>
+          <textarea id="add-proxy-urls" class="geist-input font-mono h-40" placeholder="socks5h://user:pass@host:port&#10;http://user:pass@host:port&#10;https://host:port"></textarea>
+        </div>
+        <div class="text-xs text-[var(--accents-5)]">
+          支持格式：http://、https://、socks5://（自动转 socks5h）、socks5h://
+        </div>
+        <div class="flex justify-end gap-2 pt-2">
+          <button onclick="closeAddModal()" class="geist-button-outline text-xs px-3">取消</button>
+          <button onclick="submitAddProxy()" class="geist-button text-xs px-3">添加</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bind SSO Modal -->
+  <div id="bind-modal" class="modal-overlay hidden">
+    <div class="modal-content modal-md" id="bind-modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">绑定 SSO 到代理</h3>
+        <button onclick="closeBindModal()" class="modal-close">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="space-y-4">
+        <div>
+          <label class="modal-label mb-1 block">代理地址</label>
+          <input type="text" id="bind-proxy-url" class="geist-input font-mono text-xs bg-gray-50" disabled>
+        </div>
+        <div>
+          <label class="modal-label mb-1 block">SSO Token（完整值）</label>
+          <input type="text" id="bind-sso-token" class="geist-input font-mono text-xs" placeholder="粘贴 SSO Token">
+        </div>
+        <div class="flex justify-end gap-2 pt-2">
+          <button onclick="closeBindModal()" class="geist-button-outline text-xs px-3">取消</button>
+          <button onclick="submitBindSso()" class="geist-button text-xs px-3">绑定</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirm Dialog -->
+  <div id="confirm-dialog" class="modal-overlay confirm-dialog hidden">
+    <div class="modal-content modal-md">
+      <div class="confirm-dialog-body">
+        <div class="confirm-dialog-title">请确认</div>
+        <div id="confirm-message" class="confirm-dialog-message"></div>
+        <div class="confirm-dialog-actions">
+          <button id="confirm-cancel" type="button" class="geist-button-outline text-xs px-3">取消</button>
+          <button id="confirm-ok" type="button" class="geist-button-danger text-xs px-3">确定</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/common/admin-auth.js?v=3"></script>
+  <script src="/static/common/header.js?v=4"></script>
+  <script src="/static/common/footer.js?v=1"></script>
+  <script src="/static/common/toast.js"></script>
+  <script src="/static/proxy/proxy.js?v=1"></script>
+</body>
+
+</html>
