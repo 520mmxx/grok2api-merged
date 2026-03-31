@@ -185,13 +185,18 @@ export async function sendConversationRequest(args: SendRequestOpts): Promise<Re
   const body = JSON.stringify(payload);
 
   if (proxyUrl && isSocksProxy(proxyUrl)) {
-    // SOCKS5 proxy: use connect() API with raw HTTP/1.1 client
-    return fetchViaSocks5(proxyUrl, CONVERSATION_API, {
-      method: "POST",
-      headers,
-      body,
-      timeoutMs: (settings.stream_total_timeout ?? 600) * 1000,
-    });
+    // SOCKS5 proxy: try connect() API, fallback to direct if it fails
+    try {
+      return await fetchViaSocks5(proxyUrl, CONVERSATION_API, {
+        method: "POST",
+        headers,
+        body,
+        timeoutMs: (settings.stream_total_timeout ?? 600) * 1000,
+      });
+    } catch (socksErr: any) {
+      console.warn(`[Proxy] SOCKS5 failed (${socksErr?.message || socksErr}), falling back to direct`);
+      // Fallback: direct request (might get 403 but at least won't 500 from SOCKS5 error)
+    }
   }
 
   if (proxyUrl && isHttpProxy(proxyUrl)) {

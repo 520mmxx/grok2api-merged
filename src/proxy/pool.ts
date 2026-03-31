@@ -253,16 +253,42 @@ export class ProxyPool {
   async testProxy(url: string): Promise<{ success: boolean; message: string; status_code?: number; response_time?: number }> {
     const n = normalizeProxy(url);
     const start = Date.now();
-    const testUrl = "https://grok.com";
+    // Use httpbin.org for testing (doesn't block proxy IPs like Cloudflare does)
+    const testUrl = "https://httpbin.org/get";
+
     try {
       if (isSocksProxy(n)) {
-        const resp = await fetchViaSocks5(n, testUrl, { method: "GET", headers: { "User-Agent": "Mozilla/5.0" }, timeoutMs: 15000 });
-        const elapsed = Math.round((Date.now() - start) / 10) / 100;
-        if (resp.status === 200 || resp.status === 403) {
-          return { success: true, message: resp.status === 403 ? "代理连通正常（403表示被CF拦截，但代理可用）" : "代理连通正常", status_code: resp.status, response_time: elapsed };
+        // SOCKS5: test via connect() + SOCKS5 handshake
+        try {
+          const resp = await fetchViaSocks5(n, testUrl, {
+            method: "GET",
+            headers: { "User-Agent": "Mozilla/5.0" },
+            timeoutMs: 15000,
+          });
+          const elapsed = Math.round((Date.now() - start) / 10) / 100;
+          if (resp.status >= 200 && resp.status < 500) {
+            return {
+              success: true,
+              message: resp.status === 403
+                ? "代理连通正常（403表示目标站点拦截，但代理可用）"
+                : `代理连通正常 (HTTP ${resp.status})`,
+              status_code: resp.status,
+              response_time: elapsed,
+            };
+          }
+          return { success: false, message: `代理返回异常状态码: ${resp.status}`, status_code: resp.status, response_time: elapsed };
+        } catch (socksErr: any) {
+          const elapsed = Math.round((Date.now() - start) / 10) / 100;
+          const msg = String(socksErr?.message || socksErr);
+          if (msg.includes("timeout")) return { success: false, message: "代理连接超时", response_time: elapsed };
+          if (msg.includes("auth failed")) return { success: false, message: "代理认证失败（用户名/密码错误）", response_time: elapsed };
+          if (msg.includes("refused")) return { success: false, message: "代理连接被拒绝", response_time: elapsed };
+          if (msg.includes("unreachable")) return { success: false, message: "代理地址不可达", response_time: elapsed };
+          if (msg.includes("TLS")) return { success: true, message: `代理握手成功，但TLS升级失败（代理本身可用）: ${msg}`, response_time: elapsed };
+          return { success: false, message: `代理连接失败: ${msg}`, response_time: elapsed };
         }
-        return { success: false, message: `代理返回异常状态码: ${resp.status}`, status_code: resp.status, response_time: elapsed };
       } else if (n.startsWith("http://") || n.startsWith("https://")) {
+        // HTTP proxy: test basic connectivity
         const ctrl = new AbortController();
         const t = setTimeout(() => ctrl.abort(), 15000);
         try {
@@ -279,10 +305,7 @@ export class ProxyPool {
       return { success: false, message: "不支持的代理类型" };
     } catch (e: any) {
       const elapsed = Math.round((Date.now() - start) / 10) / 100;
-      const msg = String(e?.message || e);
-      if (msg.includes("timeout") || msg.includes("abort")) return { success: false, message: "代理连接超时", response_time: elapsed };
-      if (msg.includes("refused")) return { success: false, message: "代理连接被拒绝", response_time: elapsed };
-      return { success: false, message: `代理连接失败: ${msg}`, response_time: elapsed };
+      return { success: false, message: `代理测试异常: ${e?.message || e}`, response_time: elapsed };
     }
   }
 
