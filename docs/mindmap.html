@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grok2API Merged - 思维导图 & 架构图</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(135deg, #0c0c1d 0%, #1a1a3e 50%, #0c0c1d 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            font-size: 2.2em;
+            background: linear-gradient(90deg, #00d2ff, #7b2ff7, #ff6b6b);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #8888aa;
+            font-size: 1.1em;
+            margin-bottom: 40px;
+        }
+        .section {
+            max-width: 1200px;
+            margin: 0 auto 50px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 16px;
+            padding: 30px;
+            backdrop-filter: blur(10px);
+        }
+        .section h2 {
+            font-size: 1.5em;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid rgba(123,47,247,0.3);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .section h2 .icon { font-size: 1.3em; }
+        .mermaid {
+            display: flex;
+            justify-content: center;
+            overflow-x: auto;
+            padding: 20px 0;
+        }
+        .mermaid svg { max-width: 100%; height: auto; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-top: 20px; }
+        .card {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            padding: 20px;
+            transition: transform 0.2s, border-color 0.2s;
+        }
+        .card:hover { transform: translateY(-3px); border-color: rgba(123,47,247,0.5); }
+        .card h3 { color: #7b2ff7; margin-bottom: 10px; font-size: 1.1em; }
+        .card p { color: #aaa; font-size: 0.95em; line-height: 1.6; }
+        .card code { background: rgba(123,47,247,0.2); padding: 2px 6px; border-radius: 4px; font-size: 0.9em; color: #c9a0ff; }
+        .step-list { list-style: none; counter-reset: step; }
+        .step-list li {
+            counter-increment: step;
+            padding: 15px 20px 15px 60px;
+            position: relative;
+            background: rgba(255,255,255,0.03);
+            border-radius: 10px;
+            margin-bottom: 10px;
+            border-left: 3px solid #7b2ff7;
+        }
+        .step-list li::before {
+            content: counter(step);
+            position: absolute;
+            left: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 30px;
+            height: 30px;
+            background: linear-gradient(135deg, #7b2ff7, #00d2ff);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 0.9em;
+            color: white;
+        }
+        .badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: bold;
+            margin-right: 5px;
+        }
+        .badge-new { background: rgba(255,107,107,0.2); color: #ff6b6b; border: 1px solid rgba(255,107,107,0.3); }
+        .badge-base { background: rgba(0,210,255,0.2); color: #00d2ff; border: 1px solid rgba(0,210,255,0.3); }
+        .flow-table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        .flow-table th, .flow-table td { padding: 12px 16px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.06); }
+        .flow-table th { color: #7b2ff7; font-weight: 600; white-space: nowrap; }
+        .flow-table td { color: #bbb; }
+        .flow-table tr:hover td { color: #fff; }
+        .highlight { color: #00d2ff; font-weight: 600; }
+        .warning { color: #ffaa00; }
+        footer { text-align: center; padding: 30px; color: #555; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+
+<h1>Grok2API Merged Edition</h1>
+<p class="subtitle">Cloudflare Workers 一键部署 + D1/KV 自动绑定 + IP 地址池代理管理</p>
+
+<!-- ============ 1. 项目架构思维导图 ============ -->
+<div class="section">
+    <h2><span class="icon">🏗️</span> 项目架构思维导图</h2>
+    <div class="mermaid">
+mindmap
+  root((Grok2API Merged))
+    Cloudflare Workers 基础
+      Hono 路由框架
+      D1 SQLite 数据库
+      KV 缓存存储
+      静态资源托管
+    OpenAI 兼容 API
+      /v1/chat/completions
+      /v1/models
+      /v1/images/generations
+      流式 SSE 响应
+    Token 管理
+      sso 普通 Token
+      ssoSuper 高级 Token
+      负载均衡调度
+      额度检查 & 冷却
+    代理池管理 NEW
+      添加/删除代理
+      SSO 粘性绑定
+      健康检查熔断
+      Round-Robin 调度
+      D1 + KV 双持久化
+    管理后台
+      登录认证
+      Token 管理页面
+      配置管理页面
+      代理池管理 API
+      API Key 管理
+    部署流程
+      npm install
+      wrangler d1 create
+      wrangler kv create
+      wrangler d1 migrate
+      wrangler deploy
+    </div>
+</div>
+
+<!-- ============ 2. 系统架构图 ============ -->
+<div class="section">
+    <h2><span class="icon">⚙️</span> 系统架构图</h2>
+    <div class="mermaid">
+graph TB
+    subgraph Client["客户端"]
+        C1["OpenAI SDK"]
+        C2["curl / HTTP"]
+        C3["任意 AI 应用"]
+    end
+
+    subgraph CF["Cloudflare Workers (Edge)"]
+        direction TB
+        API["Hono 路由层"]
+        AUTH["认证中间件\nAPI Key / Admin Session"]
+
+        subgraph Core["核心功能层"]
+            OPENAI["OpenAI 兼容层\n/v1/chat/completions\n/v1/models\n/v1/images"]
+            ADMIN["管理 API\n/api/v1/admin/*"]
+        end
+
+        subgraph Logic["业务逻辑层"]
+            TOKEN["Token 调度器\nselectBestToken\n负载均衡 + 冷却"]
+            PROXY["代理池管理\nSSO 绑定\n健康检查\nRound-Robin"]
+            GROK["Grok 适配器\nconversation\nprocessor\nupload/create"]
+        end
+
+        subgraph Storage["存储层"]
+            D1[("D1 数据库\ntokens / settings\nproxy_pool / logs")]
+            KV[("KV 缓存\n图片/视频缓存\n代理池状态")]
+        end
+    end
+
+    subgraph Upstream["上游服务"]
+        GROK_API["grok.com API\n/rest/app-chat/*"]
+        GROK_ASSETS["assets.grok.com\n图片/视频资源"]
+    end
+
+    C1 & C2 & C3 --> API
+    API --> AUTH
+    AUTH --> Core
+    OPENAI --> TOKEN --> PROXY --> GROK
+    GROK -->|"直连/代理"| GROK_API
+    GROK_API --> GROK_ASSETS
+    ADMIN --> D1 & KV
+    TOKEN --> D1
+    PROXY --> D1 & KV
+    GROK --> KV
+
+    style PROXY fill:#7b2ff733,stroke:#7b2ff7,stroke-width:2px
+    style D1 fill:#00d2ff22,stroke:#00d2ff
+    style KV fill:#ff6b6b22,stroke:#ff6b6b
+    </div>
+</div>
+
+<!-- ============ 3. 请求流程图 ============ -->
+<div class="section">
+    <h2><span class="icon">🔄</span> API 请求处理流程</h2>
+    <div class="mermaid">
+sequenceDiagram
+    participant C as 客户端
+    participant W as Cloudflare Worker
+    participant A as 认证中间件
+    participant T as Token 调度器
+    participant P as 代理池
+    participant G as Grok API
+
+    C->>W: POST /v1/chat/completions
+    W->>A: 验证 API Key
+    A-->>W: 认证通过
+
+    W->>T: selectBestToken(model)
+    T-->>W: 返回最优 Token (SSO)
+
+    W->>P: getProxyForSso(token)
+    alt 已绑定且健康
+        P-->>W: 返回已绑定的代理
+    else 未绑定
+        P->>P: Round-Robin 选择健康代理
+        P->>P: 自动绑定 SSO → 代理
+        P-->>W: 返回新分配的代理
+    end
+
+    W->>G: 通过代理发送请求
+    alt 请求成功
+        G-->>W: 返回 Grok 响应 (NDJSON)
+        W->>P: markSuccess(proxy)
+        W-->>C: 转换为 OpenAI SSE 格式返回
+    else 请求失败
+        G-->>W: 返回错误
+        W->>P: markFailure(proxy)
+        alt 累计失败 ≥ 3
+            P->>P: 标记代理不健康
+            P->>P: 解绑所有 SSO
+        end
+        W->>T: recordTokenFailure + cooldown
+        W->>W: 重试 (最多3次)
+    end
+    </div>
+</div>
+
+<!-- ============ 4. 代理池工作原理 ============ -->
+<div class="section">
+    <h2><span class="icon">🌐</span> 代理池工作原理</h2>
+    <div class="mermaid">
+flowchart TD
+    START([新请求到达]) --> GET_TOKEN[选择最优 Token]
+    GET_TOKEN --> CHECK_PROXY{该 SSO 已绑定代理?}
+
+    CHECK_PROXY -->|是| CHECK_HEALTH{代理健康?}
+    CHECK_HEALTH -->|是| USE_PROXY[使用该代理发送请求]
+    CHECK_HEALTH -->|否| UNBIND[解绑该 SSO]
+    UNBIND --> SELECT[Round-Robin 选择]
+
+    CHECK_PROXY -->|否| SELECT[Round-Robin 选择健康代理]
+    SELECT --> FOUND{找到健康代理?}
+    FOUND -->|是| BIND[自动绑定 SSO → 代理]
+    BIND --> USE_PROXY
+    FOUND -->|否| NO_PROXY[无代理可用\n回退直连]
+
+    USE_PROXY --> RESULT{请求结果}
+    NO_PROXY --> RESULT
+
+    RESULT -->|成功| SUCCESS[markSuccess\n重置失败计数]
+    RESULT -->|失败| FAIL[markFailure\n失败计数+1]
+
+    FAIL --> THRESHOLD{失败 ≥ 3?}
+    THRESHOLD -->|是| UNHEALTHY[标记代理不健康\n解绑所有 SSO]
+    THRESHOLD -->|否| RETRY[尝试重试]
+    UNHEALTHY --> RETRY
+
+    SUCCESS --> DONE([完成])
+    RETRY --> DONE
+
+    style SELECT fill:#7b2ff733,stroke:#7b2ff7
+    style SUCCESS fill:#00ff8833,stroke:#00ff88
+    style FAIL fill:#ff6b6b33,stroke:#ff6b6b
+    style UNHEALTHY fill:#ff444433,stroke:#ff4444
+    </div>
+</div>
+
+<!-- ============ 5. 数据库表结构 ============ -->
+<div class="section">
+    <h2><span class="icon">🗄️</span> D1 数据库表结构</h2>
+    <div class="mermaid">
+erDiagram
+    settings ||--o{ global_config : contains
+    settings ||--o{ grok_config : contains
+    settings ||--o{ token_config : contains
+
+    tokens {
+        string token PK
+        string token_type "sso | ssoSuper"
+        integer remaining_queries
+        integer heavy_remaining_queries
+        string status "active | expired"
+        integer failed_count
+        integer cooldown_until
+        string tags "JSON array"
+        string note
+    }
+
+    api_keys {
+        string key PK
+        string name
+        integer is_active
+        integer chat_limit
+        integer heavy_limit
+        integer image_limit
+        integer video_limit
+    }
+
+    api_key_usage_daily {
+        string key FK
+        string day
+        integer chat_used
+        integer heavy_used
+        integer image_used
+        integer video_used
+    }
+
+    proxy_pool {
+        string url PK
+        integer healthy "0|1"
+        integer fail_count
+        integer total_requests
+        integer success_requests
+        integer last_used
+    }
+
+    proxy_sso_bindings {
+        string sso PK
+        string proxy_url FK
+        integer bound_at
+    }
+
+    request_logs {
+        string id PK
+        string time
+        integer timestamp
+        string ip
+        string model
+        real duration
+        integer status
+        string error
+    }
+
+    admin_sessions {
+        string token PK
+        integer expires_at
+    }
+
+    tokens ||--o{ proxy_sso_bindings : "SSO binds to"
+    proxy_pool ||--o{ proxy_sso_bindings : "has bindings"
+    api_keys ||--o{ api_key_usage_daily : "tracks usage"
+    </div>
+</div>
+
+<!-- ============ 6. 部署流程 ============ -->
+<div class="section">
+    <h2><span class="icon">🚀</span> 部署流程</h2>
+    <div class="mermaid">
+flowchart LR
+    A["① npm install\n安装依赖"] --> B["② wrangler d1 create\n创建数据库"]
+    B --> C["③ wrangler kv:namespace create\n创建缓存"]
+    C --> D["④ 编辑 wrangler.toml\n填入 ID"]
+    D --> E["⑤ wrangler d1 migrations apply\n执行迁移"]
+    E --> F["⑥ 配置代理池\nPROXY_URLS"]
+    F --> G["⑦ wrangler deploy\n部署上线"]
+    G --> H["⑧ 访问 /login\n进入管理后台"]
+    H --> I["⑨ 添加 Token\n配置 API Key"]
+    I --> J["✅ 开始使用\n/v1/chat/completions"]
+
+    style A fill:#7b2ff733,stroke:#7b2ff7
+    style G fill:#00ff8833,stroke:#00ff88
+    style J fill:#00d2ff33,stroke:#00d2ff
+    </div>
+</div>
+
+<!-- ============ 7. 代理管理 API ============ -->
+<div class="section">
+    <h2><span class="icon">📡</span> 代理管理 API 一览</h2>
+    <table class="flow-table">
+        <thead>
+            <tr><th>端点</th><th>方法</th><th>功能</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+            <tr><td><code>/api/v1/admin/proxies</code></td><td>GET</td><td>查看代理池</td><td>返回所有代理状态、健康、绑定关系</td></tr>
+            <tr><td><code>/api/v1/admin/proxies</code></td><td>POST</td><td>添加代理</td><td>支持 <code>{url}</code> 单个 或 <code>{urls:[]}</code> 批量</td></tr>
+            <tr><td><code>/api/v1/admin/proxies</code></td><td>DELETE</td><td>删除代理</td><td>传入 <code>{url}</code> 删除指定代理</td></tr>
+            <tr><td><code>/api/v1/admin/proxies/assign</code></td><td>POST</td><td>绑定 SSO</td><td><code>{sso, proxy_url}</code> 手动绑定</td></tr>
+            <tr><td><code>/api/v1/admin/proxies/unassign</code></td><td>POST</td><td>解绑 SSO</td><td><code>{sso}</code> 解除绑定</td></tr>
+            <tr><td><code>/api/v1/admin/proxies/health/reset</code></td><td>POST</td><td>重置健康</td><td>所有代理恢复为健康状态</td></tr>
+            <tr><td><code>/api/v1/admin/proxies/test</code></td><td>POST</td><td>测试代理</td><td><code>{url}</code> 检测代理可用性</td></tr>
+            <tr><td><code>/api/v1/admin/proxies/clear</code></td><td>POST</td><td>清空代理池</td><td>删除所有代理和绑定关系</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- ============ 8. 功能对比 ============ -->
+<div class="section">
+    <h2><span class="icon">📊</span> 合并前后功能对比</h2>
+    <div class="mermaid">
+graph LR
+    subgraph BASE["grok2api 主干"]
+        B1["OpenAI 兼容 API"]
+        B2["D1 + KV 存储"]
+        B3["Token 管理"]
+        B4["管理后台 UI"]
+        B5["Cloudflare Workers"]
+        B6["图片/视频生成"]
+    end
+
+    subgraph PRO["grok2api-pro"]
+        P1["代理池管理"]
+        P2["SSO 绑定"]
+        P3["健康检查"]
+        P4["失败熔断"]
+        P5["状态持久化"]
+    end
+
+    subgraph MERGED["Grok2API Merged"]
+        M1["OpenAI 兼容 API ✅"]
+        M2["D1 + KV 存储 ✅"]
+        M3["Token 管理 ✅"]
+        M4["管理后台 UI ✅"]
+        M5["Cloudflare Workers ✅"]
+        M6["图片/视频生成 ✅"]
+        M7["代理池管理 🆕"]
+        M8["SSO 绑定 🆕"]
+        M9["健康检查 🆕"]
+        M10["失败熔断 🆕"]
+        M11["D1+KV 双持久化 🆕"]
+    end
+
+    B1 & B2 & B3 & B4 & B5 & B6 --> MERGED
+    P1 & P2 & P3 & P4 & P5 --> MERGED
+
+    style MERGED fill:#7b2ff722,stroke:#7b2ff7,stroke-width:3px
+    </div>
+</div>
+
+<!-- ============ 9. 快速参考卡片 ============ -->
+<div class="section">
+    <h2><span class="icon">🃏</span> 快速参考卡片</h2>
+    <div class="grid">
+        <div class="card">
+            <h3>🔑 默认登录</h3>
+            <p>地址: <code>/login</code><br>用户名: <code>admin</code><br>密码: <code>admin</code></p>
+        </div>
+        <div class="card">
+            <h3>🏥 健康检查</h3>
+            <p><code>GET /health</code><br>返回系统状态和代理池信息</p>
+        </div>
+        <div class="card">
+            <h3>📋 模型列表</h3>
+            <p><code>GET /v1/models</code><br>15 个可用模型 (文本/图片/视频)</p>
+        </div>
+        <div class="card">
+            <h3>💬 聊天接口</h3>
+            <p><code>POST /v1/chat/completions</code><br>兼容 OpenAI 格式，支持流式</p>
+        </div>
+        <div class="card">
+            <h3>🌐 代理格式</h3>
+            <p><code>http://ip:port</code><br><code>socks5h://ip:port</code><br><code>https://ip:port</code></p>
+        </div>
+        <div class="card">
+            <h3>⚡ 部署命令</h3>
+            <p><code>wrangler d1 create</code><br><code>wrangler kv create</code><br><code>wrangler deploy</code></p>
+        </div>
+        <div class="card">
+            <h3>🔧 环境变量</h3>
+            <p><code>PROXY_URLS</code> 代理列表<br><code>PROXY_POOL_URL</code> 动态池<br><code>PROXY_POOL_INTERVAL</code> 刷新间隔</p>
+        </div>
+        <div class="card">
+            <h3>🛡️ 代理特性</h3>
+            <p>SSO 粘性绑定<br>3次失败自动熔断<br>Round-Robin 调度<br>D1+KV 双持久化</p>
+        </div>
+    </div>
+</div>
+
+<footer>
+    <p>Grok2API Merged Edition &mdash; 基于 grok2api + grok2api-pro &mdash; MIT License</p>
+</footer>
+
+<script>
+    mermaid.initialize({
+        startOnLoad: true,
+        theme: 'dark',
+        themeVariables: {
+            primaryColor: '#7b2ff7',
+            primaryTextColor: '#e0e0e0',
+            primaryBorderColor: '#7b2ff7',
+            lineColor: '#00d2ff',
+            secondaryColor: '#1a1a3e',
+            tertiaryColor: '#0c0c1d',
+            fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+            fontSize: '14px'
+        },
+        mindmap: { padding: 20 },
+        flowchart: { curve: 'basis', padding: 15 },
+        sequence: { mirrorActors: false, messageMargin: 40 }
+    });
+</script>
+
+</body>
+</html>

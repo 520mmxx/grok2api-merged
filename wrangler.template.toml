@@ -1,0 +1,81 @@
+# ============================================================
+# Grok2API Merged - wrangler.toml 配置模板
+# ============================================================
+# 使用方法: 复制此文件内容替换 wrangler.toml，填入你的 ID
+# ============================================================
+
+name = "grok2api"
+main = "src/index.ts"
+compatibility_date = "2026-01-28"
+
+# Static assets (admin UI)
+assets = { directory = "./app/static", binding = "ASSETS" }
+
+# Hard-pin execution closer to the US to make egress locality more stable.
+[placement]
+region = "aws:us-east-1"
+
+# ============================================================
+# D1 数据库配置
+# ============================================================
+[[d1_databases]]
+binding = "DB"
+database_name = "grok2api"
+database_id = "替换为你的D1数据库ID"           # ← 填入 wrangler d1 create 返回的 ID
+migrations_dir = "migrations"
+
+# ============================================================
+# KV 缓存配置
+# ============================================================
+[[kv_namespaces]]
+binding = "KV_CACHE"
+id = "替换为你的KV命名空间ID"                  # ← 填入 wrangler kv create 返回的 ID
+
+# Durable Objects migrations (不要修改)
+[[migrations]]
+tag = "do-v1"
+new_sqlite_classes = ["AutoRegisterJob"]
+
+[[migrations]]
+tag = "do-v2"
+deleted_classes = ["AutoRegisterJob"]
+
+# ============================================================
+# 环境变量配置
+# ============================================================
+[vars]
+# 时区偏移 (分钟)，默认 480 = UTC+8 (Asia/Shanghai)
+CACHE_RESET_TZ_OFFSET_MINUTES = "480"
+
+# 构建信息
+BUILD_SHA = "dev"
+
+# KV 值大小限制 (默认 25MB)
+KV_CACHE_MAX_BYTES = "26214400"
+
+# 每日清理批次大小
+KV_CLEANUP_BATCH = "200"
+
+# ============================================================
+# 🆕 代理池配置
+# ============================================================
+
+# 代理 URL 列表 (逗号分隔)
+# 支持格式: http://ip:port, https://ip:port, socks5h://ip:port
+# 示例: PROXY_URLS = "http://1.2.3.4:8080,http://5.6.7.8:3128,socks5h://9.10.11.12:1080"
+PROXY_URLS = ""
+
+# 外部代理池 API 地址 (可选)
+# 每次调用返回一个代理 URL，系统会自动获取并加入代理池
+# 示例: PROXY_POOL_URL = "https://your-proxy-pool.com/get"
+PROXY_POOL_URL = ""
+
+# 代理池刷新间隔 (秒)，默认 300 = 5 分钟
+PROXY_POOL_INTERVAL = "300"
+
+# ============================================================
+# 定时任务
+# ============================================================
+[triggers]
+# 每天 00:00 (Asia/Shanghai = 16:00 UTC) 清理过期缓存
+crons = ["0 16 * * *"]
