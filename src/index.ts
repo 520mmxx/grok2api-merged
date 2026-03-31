@@ -17,16 +17,16 @@ async function bootstrapProxyPool(env: Env): Promise<void> {
   try {
     const pool = await getProxyPool(env);
 
-    // Bootstrap from PROXY_URLS env var if pool is empty
-    const proxies = pool.getAllProxies();
-    if (proxies.length === 0) {
-      const urlsRaw = (env.PROXY_URLS ?? "").trim();
-      if (urlsRaw) {
-        const urls = urlsRaw.split(",").map((u) => u.trim()).filter(Boolean);
-        for (const url of urls) {
-          await pool.addProxy(url);
+    // Always bootstrap from PROXY_URLS env var (add + reset health)
+    const urlsRaw = (env.PROXY_URLS ?? "").trim();
+    if (urlsRaw) {
+      const urls = urlsRaw.split(",").map((u) => u.trim()).filter(Boolean);
+      for (const url of urls) {
+        const result = pool.addProxy(url);
+        if (result.success) {
+          // Reset health for env-var proxies (they should always start healthy)
+          await pool.resetHealth(url);
         }
-        console.log(`[proxy-pool] Bootstrapped ${urls.length} proxies from PROXY_URLS`);
       }
     }
   } catch (e) {

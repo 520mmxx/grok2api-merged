@@ -255,18 +255,21 @@ export async function fetchViaSocks5(
   const targetHost = target.hostname;
   const targetPort = target.protocol === "https:" ? 443 : parseInt(target.port || "80", 10);
   const useTLS = target.protocol === "https:";
-  const timeoutMs = options.timeoutMs ?? 30000;
+  const timeoutMs = Math.min(options.timeoutMs ?? 30000, 15000); // Max 15s for connect
   let conn: Socket | null = null;
 
   try {
-    // Connect to SOCKS5 proxy
+    // Connect to SOCKS5 proxy with timeout
     conn = connect(
       { hostname: proxy.host, port: proxy.port },
       { secureTransport: "off", allowHalfOpen: false },
     );
 
-    // Wait for connection to open
-    await conn.opened;
+    // Wait for connection to open with timeout
+    const connectTimeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("SOCKS5: connect timeout")), timeoutMs)
+    );
+    await Promise.race([conn.opened, connectTimeout]);
 
     // Get reader/writer for handshake
     const reader = conn.readable.getReader();
@@ -292,11 +295,14 @@ export async function fetchViaSocks5(
     if (useTLS) {
       try {
         tlsConn = conn.startTls({ expectedServerHostname: targetHost });
-        await tlsConn.opened;
+        const tlsTimeout = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("SOCKS5: TLS handshake timeout")), 10000)
+        );
+        await Promise.race([tlsConn.opened, tlsTimeout]);
         readStream = tlsConn.readable;
         writeStream = tlsConn.writable;
       } catch (tlsErr: any) {
-        throw new Error(`SOCKS5 TLS handshake failed for ${targetHost}: ${tlsErr?.message || tlsErr}`);
+        throw new Error(`SOCKS5 TLS handshake failed: ${tlsErr?.message || tlsErr}`);
       }
     } else {
       readStream = conn.readable;
