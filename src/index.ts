@@ -18,7 +18,7 @@ async function bootstrapProxyPool(env: Env): Promise<void> {
     const pool = await getProxyPool(env);
 
     // Bootstrap from PROXY_URLS env var if pool is empty
-    const proxies = pool.getProxies();
+    const proxies = pool.getAllProxies();
     if (proxies.length === 0) {
       const urlsRaw = (env.PROXY_URLS ?? "").trim();
       if (urlsRaw) {
@@ -217,11 +217,11 @@ app.get("/health", async (c) => {
   let proxyPoolInfo = { enabled: false, total: 0, healthy: 0 };
   try {
     const pool = await getProxyPool(env);
-    const proxies = pool.getProxies();
+    const proxies = pool.getAllProxies();
     proxyPoolInfo = {
       enabled: pool.isEnabled(),
       total: proxies.length,
-      healthy: proxies.filter((p) => p.healthy).length,
+      healthy: proxies.filter((p: any) => p.healthy).length,
     };
   } catch {
     // ignore proxy pool errors in health check

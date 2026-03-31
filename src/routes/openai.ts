@@ -1283,7 +1283,7 @@ openAiRoutes.post("/chat/completions", async (c) => {
           settings: settingsBundle.grok,
         });
 
-        const proxyUrl = proxyPool.getProxyForSso(jwt) ?? undefined;
+        const proxyUrl = (await proxyPool.getProxyForSso(jwt)) ?? undefined;
         const upstream = await sendConversationRequest({
           payload,
           cookie,
@@ -1359,8 +1359,6 @@ openAiRoutes.post("/chat/completions", async (c) => {
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         lastErr = msg;
-        const proxyUrl = proxyPool.getProxyForSso(jwt) ?? undefined;
-        if (proxyUrl) await proxyPool.markFailure(proxyUrl);
         await recordTokenFailure(c.env.DB, jwt, 500, msg);
         await applyCooldown(c.env.DB, jwt, 500);
         if (attempt < maxRetry - 1) continue;

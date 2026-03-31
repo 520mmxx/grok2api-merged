@@ -1563,185 +1563,140 @@ adminRoutes.post("/api/logs/add", requireAdminAuth, async (c) => {
   }
 });
 
-// === Proxy Pool Management (from grok2api-pro) ===
+// === Proxy Pool Management (完全对齐 grok2api-pro) ===
 
+// GET /api/v1/admin/proxies - 获取代理列表
 adminRoutes.get("/api/v1/admin/proxies", requireAdminAuth, async (c) => {
   try {
     const pool = await getProxyPool(c.env);
-    const proxies = pool.getProxies();
+    const proxies = pool.getAllProxies();
     const assignments = pool.getSsoAssignments();
-
-    // Build reverse map: proxy_url -> assigned SSOs
-    const ssoByProxy: Record<string, string[]> = {};
-    for (const [sso, url] of Object.entries(assignments)) {
-      if (!ssoByProxy[url]) ssoByProxy[url] = [];
-      ssoByProxy[url]!.push(sso);
-    }
-
-    const data = proxies.map((p) => ({
-      url: p.url,
-      healthy: p.healthy,
-      fail_count: p.fail_count,
-      last_used: p.last_used,
-      total_requests: p.total_requests,
-      success_requests: p.success_requests,
-      success_rate: p.total_requests > 0
-        ? Math.round((p.success_requests / p.total_requests) * 10000) / 100
-        : 0,
-      assigned_sso: ssoByProxy[p.url] ?? [],
-      assigned_sso_count: (ssoByProxy[p.url] ?? []).length,
-    }));
-
     return c.json({
       success: true,
       data: {
-        enabled: pool.isEnabled(),
-        proxies: data,
-        total: data.length,
-        healthy: data.filter((p) => p.healthy).length,
-        unhealthy: data.filter((p) => !p.healthy).length,
-        sso_assignments: assignments,
+        proxies: proxies.map((p) => ({
+          ...p,
+          success_rate: p.total_requests > 0
+            ? Math.round((p.success_requests / p.total_requests) * 10000) / 100
+            : 0,
+        })),
+        assignments,
+        total: proxies.length,
       },
     });
   } catch (e) {
-    return c.json(jsonError(`获取代理池失败: ${e instanceof Error ? e.message : String(e)}`, "PROXY_LIST_ERROR"), 500);
+    return c.json({ success: false, error: `获取失败: ${e instanceof Error ? e.message : String(e)}` }, 500);
   }
 });
 
+// POST /api/v1/admin/proxies - 添加代理
 adminRoutes.post("/api/v1/admin/proxies", requireAdminAuth, async (c) => {
   try {
-    const body = (await c.req.json()) as { url?: string; urls?: string[] };
     const pool = await getProxyPool(c.env);
+    const body = (await c.req.json()) as { url?: string; urls?: string[] };
 
+    // 支持单个 url 或批量 urls
     const urls: string[] = [];
     if (typeof body.url === "string" && body.url.trim()) urls.push(body.url.trim());
-    if (Array.isArray(body.urls)) urls.push(...body.urls.filter((u) => typeof u === "string" && u.trim()).map((u) => u.trim()));
-
-    if (!urls.length) return c.json(jsonError("No proxy URLs provided", "MISSING_URLS"), 400);
-
-    const results: Array<{ url: string; ok: boolean; error: string }> = [];
-    for (const url of urls) {
-      const result = await pool.addProxy(url);
-      results.push({ url, ok: result.ok, error: result.error ?? "" });
+    if (Array.isArray(body.urls)) {
+      for (const u of body.urls) {
+        if (typeof u === "string" && u.trim()) urls.push(u.trim());
+      }
     }
+    if (!urls.length) return c.json({ success: false, message: "请输入代理URL" }, 400);
 
-    const added = results.filter((r) => r.ok).length;
+    let added = 0;
+    const errors: string[] = [];
+    for (const url of urls) {
+      const result = pool.addProxy(url);
+      if (result.success) added++;
+      else errors.push(`${url}: ${result.message}`);
+    }
     return c.json({
       success: added > 0,
-      message: `Added ${added}/${urls.length} proxies`,
-      data: { results },
+      message: added > 0 ? `成功添加 ${added}/${urls.length} 个代理` : "添加失败",
+      ...(errors.length ? { errors } : {}),
     });
   } catch (e) {
-    return c.json(jsonError(`添加代理失败: ${e instanceof Error ? e.message : String(e)}`, "PROXY_ADD_ERROR"), 500);
+    return c.json({ success: false, message: `添加失败: ${e instanceof Error ? e.message : String(e)}` }, 500);
   }
 });
 
+// DELETE /api/v1/admin/proxies - 删除代理
 adminRoutes.delete("/api/v1/admin/proxies", requireAdminAuth, async (c) => {
   try {
     const body = (await c.req.json()) as { url?: string };
     const url = String(body?.url ?? "").trim();
-    if (!url) return c.json(jsonError("Missing proxy URL", "MISSING_URL"), 400);
-
+    if (!url) return c.json({ success: false, message: "请输入代理URL" }, 400);
     const pool = await getProxyPool(c.env);
     const result = await pool.removeProxy(url);
-    return c.json(result.ok ? { success: true, message: "代理已删除" } : { success: false, error: result.error });
+    return c.json(result);
   } catch (e) {
-    return c.json(jsonError(`删除代理失败: ${e instanceof Error ? e.message : String(e)}`, "PROXY_DELETE_ERROR"), 500);
+    return c.json({ success: false, message: `删除失败: ${e instanceof Error ? e.message : String(e)}` }, 500);
   }
 });
 
+// POST /api/v1/admin/proxies/assign - 绑定SSO到代理
 adminRoutes.post("/api/v1/admin/proxies/assign", requireAdminAuth, async (c) => {
   try {
-    const body = (await c.req.json()) as { sso?: string; proxy_url?: string };
-    const sso = String(body?.sso ?? "").trim();
+    const body = (await c.req.json()) as { proxy_url?: string; sso?: string };
     const proxyUrl = String(body?.proxy_url ?? "").trim();
-    if (!sso || !proxyUrl) return c.json(jsonError("Missing sso or proxy_url", "MISSING_PARAMS"), 400);
-
+    const sso = String(body?.sso ?? "").trim();
+    if (!proxyUrl || !sso) return c.json({ success: false, message: "请输入代理URL和SSO" }, 400);
     const pool = await getProxyPool(c.env);
-    const result = await pool.assignToSso(sso, proxyUrl);
-    return c.json(result.ok ? { success: true, message: `SSO ${sso.slice(-6)} 已绑定到代理` } : { success: false, error: result.error });
+    const result = await pool.assignToSso(proxyUrl, sso);
+    return c.json(result);
   } catch (e) {
-    return c.json(jsonError(`绑定失败: ${e instanceof Error ? e.message : String(e)}`, "PROXY_ASSIGN_ERROR"), 500);
+    return c.json({ success: false, message: `绑定失败: ${e instanceof Error ? e.message : String(e)}` }, 500);
   }
 });
 
+// POST /api/v1/admin/proxies/unassign - 解绑SSO
 adminRoutes.post("/api/v1/admin/proxies/unassign", requireAdminAuth, async (c) => {
   try {
     const body = (await c.req.json()) as { sso?: string };
     const sso = String(body?.sso ?? "").trim();
-    if (!sso) return c.json(jsonError("Missing sso", "MISSING_SSO"), 400);
-
+    if (!sso) return c.json({ success: false, message: "请输入SSO" }, 400);
     const pool = await getProxyPool(c.env);
-    await pool.unassignFromSso(sso);
-    return c.json({ success: true, message: `SSO ${sso.slice(-6)} 已解绑` });
+    const result = await pool.unassignFromSso(sso);
+    return c.json(result);
   } catch (e) {
-    return c.json(jsonError(`解绑失败: ${e instanceof Error ? e.message : String(e)}`, "PROXY_UNASSIGN_ERROR"), 500);
+    return c.json({ success: false, message: `解绑失败: ${e instanceof Error ? e.message : String(e)}` }, 500);
   }
 });
 
+// POST /api/v1/admin/proxies/health/reset - 重置代理健康状态
 adminRoutes.post("/api/v1/admin/proxies/health/reset", requireAdminAuth, async (c) => {
   try {
     const pool = await getProxyPool(c.env);
-    await pool.resetHealth();
-    return c.json({ success: true, message: "所有代理健康状态已重置" });
+    await pool.resetAllHealth();
+    return c.json({ success: true, message: "健康状态已重置" });
   } catch (e) {
-    return c.json(jsonError(`重置失败: ${e instanceof Error ? e.message : String(e)}`, "PROXY_RESET_ERROR"), 500);
+    return c.json({ success: false, message: `重置失败: ${e instanceof Error ? e.message : String(e)}` }, 500);
   }
 });
 
+// POST /api/v1/admin/proxies/test - 测试代理连通性
 adminRoutes.post("/api/v1/admin/proxies/test", requireAdminAuth, async (c) => {
   try {
     const body = (await c.req.json()) as { url?: string };
     const url = String(body?.url ?? "").trim();
-    if (!url) return c.json(jsonError("Missing proxy URL", "MISSING_URL"), 400);
-
-    // Test proxy by attempting a request through it
-    const testUrl = "https://grok.com";
-    let targetUrl = testUrl;
-    const p = url.replace(/\/+$/, "");
-    try {
-      const proxyUrlObj = new URL(p);
-      if (proxyUrlObj.pathname !== "/" && proxyUrlObj.pathname !== "") {
-        targetUrl = `${p}?url=${encodeURIComponent(testUrl)}`;
-      } else {
-        const t = new URL(testUrl);
-        t.hostname = proxyUrlObj.hostname;
-        t.port = proxyUrlObj.port;
-        t.protocol = proxyUrlObj.protocol;
-        targetUrl = t.toString();
-      }
-    } catch {
-      return c.json({ success: false, message: "代理URL格式无效" });
-    }
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
-    try {
-      const resp = await fetch(targetUrl, { method: "HEAD", signal: controller.signal });
-      clearTimeout(timeout);
-      return c.json({
-        success: resp.ok,
-        message: resp.ok ? "代理可用" : `代理响应异常: ${resp.status}`,
-        data: { status: resp.status },
-      });
-    } catch (e) {
-      clearTimeout(timeout);
-      return c.json({
-        success: false,
-        message: `代理连接失败: ${e instanceof Error ? e.message : String(e)}`,
-      });
-    }
+    if (!url) return c.json({ success: false, message: "请输入代理URL" }, 400);
+    const pool = await getProxyPool(c.env);
+    const result = await pool.testProxy(url);
+    return c.json(result);
   } catch (e) {
-    return c.json(jsonError(`测试失败: ${e instanceof Error ? e.message : String(e)}`, "PROXY_TEST_ERROR"), 500);
+    return c.json({ success: false, message: `测试失败: ${e instanceof Error ? e.message : String(e)}` }, 500);
   }
 });
 
+// POST /api/v1/admin/proxies/clear - 清空代理池
 adminRoutes.post("/api/v1/admin/proxies/clear", requireAdminAuth, async (c) => {
   try {
     const pool = await getProxyPool(c.env);
     await pool.clearAll();
     return c.json({ success: true, message: "代理池已清空" });
   } catch (e) {
-    return c.json(jsonError(`清空失败: ${e instanceof Error ? e.message : String(e)}`, "PROXY_CLEAR_ERROR"), 500);
+    return c.json({ success: false, message: `清空失败: ${e instanceof Error ? e.message : String(e)}` }, 500);
   }
 });

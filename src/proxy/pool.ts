@@ -1,6 +1,11 @@
+/**
+ * 代理池管理器 - 完全对齐 grok2api-pro 的 proxy_pool.py
+ * 支持多代理URL、SSO绑定、健康检查、失败熔断、Round-Robin调度、D1+KV双持久化
+ */
 import type { Env } from "../env";
-import { dbAll, dbFirst, dbRun } from "../db";
+import { dbAll, dbRun } from "../db";
 import { nowMs } from "../utils/time";
+import { fetchViaSocks5, isSocksProxy } from "./socks5";
 
 const MAX_FAIL_COUNT = 3;
 const PROXY_STATE_KV_KEY = "proxy_pool_state";
@@ -9,32 +14,29 @@ export interface ProxyInfo {
   url: string;
   healthy: boolean;
   fail_count: number;
-  last_used: number | null;
+  last_used: number;
+  assigned_sso: string[];
   total_requests: number;
   success_requests: number;
-  assigned_sso: string[];
 }
 
 export interface ProxyPoolState {
   proxies: Record<string, ProxyInfo>;
-  sso_assignments: Record<string, string>; // sso -> proxy_url
+  sso_assignments: Record<string, string>;
   round_robin_index: number;
-  enabled: boolean;
 }
 
-function normalizeProxyUrl(raw: string): string {
-  let url = raw.trim();
-  if (!url) return "";
-  // Normalize socks5 -> socks5h (DNS via proxy)
-  if (url.startsWith("socks5://")) url = "socks5h://" + url.slice("socks5://".length);
-  if (url.startsWith("sock5://")) url = "socks5h://" + url.slice("sock5://".length);
-  if (url.startsWith("sock5h://")) url = "socks5h://" + url.slice("sock5h://".length);
-  // Remove trailing slash
-  url = url.replace(/\/+$/, "");
+function normalizeProxy(raw: string): string {
+  if (!raw) return "";
+  let url = raw.trim().replace(/\/+$/, "");
+  if (url.startsWith("sock5h://")) url = url.replace("sock5h://", "socks5h://");
+  if (url.startsWith("sock5://")) url = url.replace("sock5://", "socks5h://");
+  if (url.startsWith("socks5://")) url = url.replace("socks5://", "socks5h://");
   return url;
 }
 
-function validateProxyUrl(url: string): boolean {
+function validateProxy(url: string): boolean {
+  if (!url) return false;
   return (
     url.startsWith("http://") ||
     url.startsWith("https://") ||
@@ -45,323 +47,252 @@ function validateProxyUrl(url: string): boolean {
 
 export class ProxyPool {
   private env: Env;
-  private state: ProxyPoolState;
+  private proxies: Map<string, ProxyInfo> = new Map();
+  private sso_assignments: Map<string, string> = new Map();
+  private round_robin_index: number = 0;
 
   constructor(env: Env) {
     this.env = env;
-    this.state = {
-      proxies: {},
-      sso_assignments: {},
-      round_robin_index: 0,
-      enabled: false,
-    };
   }
 
   async init(): Promise<void> {
-    // Try loading from KV first (faster)
     const kvState = await this.env.KV_CACHE.get<ProxyPoolState>(PROXY_STATE_KV_KEY, "json");
     if (kvState && kvState.proxies) {
-      this.state = kvState;
+      this.proxies = new Map(Object.entries(kvState.proxies));
+      this.sso_assignments = new Map(Object.entries(kvState.sso_assignments || {}));
+      this.round_robin_index = kvState.round_robin_index || 0;
       return;
     }
-
-    // Fallback: load from D1
-    const rows = await dbAll<{
-      url: string;
-      healthy: number;
-      fail_count: number;
-      last_used: number | null;
-      total_requests: number;
-      success_requests: number;
-    }>(this.env.DB, "SELECT * FROM proxy_pool");
-
-    const bindingRows = await dbAll<{ sso: string; proxy_url: string }>(
-      this.env.DB,
-      "SELECT sso, proxy_url FROM proxy_sso_bindings",
-    );
-
-    const proxies: Record<string, ProxyInfo> = {};
-    for (const r of rows) {
-      proxies[r.url] = {
-        url: r.url,
-        healthy: Boolean(r.healthy),
-        fail_count: r.fail_count,
-        last_used: r.last_used,
-        total_requests: r.total_requests,
-        success_requests: r.success_requests,
-        assigned_sso: [],
-      };
-    }
-
-    const sso_assignments: Record<string, string> = {};
-    for (const b of bindingRows) {
-      sso_assignments[b.sso] = b.proxy_url;
-      if (proxies[b.proxy_url]) {
-        proxies[b.proxy_url]!.assigned_sso.push(b.sso);
+    try {
+      const rows = await dbAll<{
+        url: string; healthy: number; fail_count: number;
+        last_used: number | null; total_requests: number; success_requests: number;
+      }>(this.env.DB, "SELECT * FROM proxy_pool");
+      const bindings = await dbAll<{ sso: string; proxy_url: string }>(
+        this.env.DB, "SELECT sso, proxy_url FROM proxy_sso_bindings"
+      );
+      for (const r of rows) {
+        this.proxies.set(r.url, {
+          url: r.url, healthy: Boolean(r.healthy), fail_count: r.fail_count,
+          last_used: r.last_used || 0, total_requests: r.total_requests,
+          success_requests: r.success_requests, assigned_sso: [],
+        });
       }
-    }
+      for (const b of bindings) {
+        this.sso_assignments.set(b.sso, b.proxy_url);
+        const p = this.proxies.get(b.proxy_url);
+        if (p && !p.assigned_sso.includes(b.sso)) p.assigned_sso.push(b.sso);
+      }
+    } catch { /* ignore */ }
+    await this._persist();
+  }
 
-    this.state = {
-      proxies,
-      sso_assignments,
-      round_robin_index: 0,
-      enabled: Object.keys(proxies).length > 0,
+  private async _persist(): Promise<void> {
+    const state: ProxyPoolState = {
+      proxies: Object.fromEntries(this.proxies),
+      sso_assignments: Object.fromEntries(this.sso_assignments),
+      round_robin_index: this.round_robin_index,
     };
-
-    // Save to KV for fast access
-    await this.persist();
+    await this.env.KV_CACHE.put(PROXY_STATE_KV_KEY, JSON.stringify(state));
   }
 
-  isEnabled(): boolean {
-    return this.state.enabled;
-  }
-
-  getProxies(): ProxyInfo[] {
-    return Object.values(this.state.proxies);
-  }
-
-  getSsoAssignments(): Record<string, string> {
-    return { ...this.state.sso_assignments };
-  }
-
-  private async persist(): Promise<void> {
-    await this.env.KV_CACHE.put(PROXY_STATE_KV_KEY, JSON.stringify(this.state));
-  }
-
-  private async persistToD1(proxy: ProxyInfo): Promise<void> {
-    await dbRun(
-      this.env.DB,
-      `INSERT INTO proxy_pool(url, healthy, fail_count, last_used, total_requests, success_requests, created_at, updated_at)
-       VALUES(?,?,?,?,?,?,?,?)
-       ON CONFLICT(url) DO UPDATE SET healthy=excluded.healthy, fail_count=excluded.fail_count,
-       last_used=excluded.last_used, total_requests=excluded.total_requests,
-       success_requests=excluded.success_requests, updated_at=excluded.updated_at`,
-      [
-        proxy.url,
-        proxy.healthy ? 1 : 0,
-        proxy.fail_count,
-        proxy.last_used,
-        proxy.total_requests,
-        proxy.success_requests,
-        nowMs(),
-        nowMs(),
-      ],
+  private async _persistD1(p: ProxyInfo): Promise<void> {
+    await dbRun(this.env.DB,
+      `INSERT INTO proxy_pool(url,healthy,fail_count,last_used,total_requests,success_requests,created_at,updated_at)
+       VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(url) DO UPDATE SET healthy=excluded.healthy,
+       fail_count=excluded.fail_count,last_used=excluded.last_used,
+       total_requests=excluded.total_requests,success_requests=excluded.success_requests,updated_at=excluded.updated_at`,
+      [p.url, p.healthy ? 1 : 0, p.fail_count, p.last_used, p.total_requests, p.success_requests, nowMs(), nowMs()]
     );
   }
 
-  private async removeD1Binding(sso: string): Promise<void> {
+  private async _removeD1(url: string): Promise<void> {
+    await dbRun(this.env.DB, "DELETE FROM proxy_pool WHERE url = ?", [url]);
+  }
+
+  private async _bindD1(sso: string, url: string): Promise<void> {
+    await dbRun(this.env.DB,
+      `INSERT INTO proxy_sso_bindings(sso,proxy_url,bound_at) VALUES(?,?,?)
+       ON CONFLICT(sso) DO UPDATE SET proxy_url=excluded.proxy_url,bound_at=excluded.bound_at`,
+      [sso, url, nowMs()]
+    );
+  }
+
+  private async _unbindD1(sso: string): Promise<void> {
     await dbRun(this.env.DB, "DELETE FROM proxy_sso_bindings WHERE sso = ?", [sso]);
   }
 
-  private async addD1Binding(sso: string, proxyUrl: string): Promise<void> {
-    await dbRun(
-      this.env.DB,
-      `INSERT INTO proxy_sso_bindings(sso, proxy_url, bound_at) VALUES(?,?,?)
-       ON CONFLICT(sso) DO UPDATE SET proxy_url=excluded.proxy_url, bound_at=excluded.bound_at`,
-      [sso, proxyUrl, nowMs()],
-    );
+  addProxy(url: string): { success: boolean; message: string } {
+    const n = normalizeProxy(url);
+    if (!n || !validateProxy(n)) return { success: false, message: "代理格式无效" };
+    if (this.proxies.has(n)) return { success: true, message: "代理已存在" };
+    const info: ProxyInfo = { url: n, healthy: true, fail_count: 0, last_used: 0, assigned_sso: [], total_requests: 0, success_requests: 0 };
+    this.proxies.set(n, info);
+    void this._persistD1(info);
+    void this._persist();
+    return { success: true, message: "代理添加成功" };
   }
 
-  async addProxy(url: string): Promise<{ ok: boolean; error?: string }> {
-    const normalized = normalizeProxyUrl(url);
-    if (!normalized) return { ok: false, error: "Empty proxy URL" };
-    if (!validateProxyUrl(normalized)) {
-      return { ok: false, error: "Invalid proxy scheme (use http/https/socks5/socks5h)" };
-    }
-    if (this.state.proxies[normalized]) {
-      return { ok: false, error: "Proxy already exists" };
-    }
-
-    const proxy: ProxyInfo = {
-      url: normalized,
-      healthy: true,
-      fail_count: 0,
-      last_used: null,
-      total_requests: 0,
-      success_requests: 0,
-      assigned_sso: [],
-    };
-
-    this.state.proxies[normalized] = proxy;
-    this.state.enabled = true;
-    await this.persistToD1(proxy);
-    await this.persist();
-    return { ok: true };
+  async removeProxy(url: string): Promise<{ success: boolean; message: string }> {
+    const n = normalizeProxy(url);
+    const p = this.proxies.get(n);
+    if (!p) return { success: false, message: "代理不存在" };
+    for (const sso of [...p.assigned_sso]) { this.sso_assignments.delete(sso); await this._unbindD1(sso); }
+    this.proxies.delete(n);
+    await this._removeD1(n);
+    await this._persist();
+    return { success: true, message: "代理删除成功" };
   }
 
-  async removeProxy(url: string): Promise<{ ok: boolean; error?: string }> {
-    const normalized = normalizeProxyUrl(url);
-    if (!normalized || !this.state.proxies[normalized]) {
-      return { ok: false, error: "Proxy not found" };
+  async assignToSso(proxyUrl: string, sso: string): Promise<{ success: boolean; message: string }> {
+    const n = normalizeProxy(proxyUrl);
+    if (!this.proxies.has(n)) return { success: false, message: "代理不存在" };
+    const old = this.sso_assignments.get(sso);
+    if (old && this.proxies.has(old)) {
+      const o = this.proxies.get(old)!;
+      o.assigned_sso = o.assigned_sso.filter((s) => s !== sso);
     }
-
-    // Unbind all SSOs from this proxy
-    const proxy = this.state.proxies[normalized]!;
-    for (const sso of [...proxy.assigned_sso]) {
-      delete this.state.sso_assignments[sso];
-      await this.removeD1Binding(sso);
-    }
-
-    delete this.state.proxies[normalized];
-    await dbRun(this.env.DB, "DELETE FROM proxy_pool WHERE url = ?", [normalized]);
-    await this.persist();
-
-    if (Object.keys(this.state.proxies).length === 0) {
-      this.state.enabled = false;
-    }
-    return { ok: true };
+    this.sso_assignments.set(sso, n);
+    const p = this.proxies.get(n)!;
+    if (!p.assigned_sso.includes(sso)) p.assigned_sso.push(sso);
+    await this._bindD1(sso, n);
+    await this._persistD1(p);
+    await this._persist();
+    return { success: true, message: "绑定成功" };
   }
 
-  async assignToSso(sso: string, proxyUrl: string): Promise<{ ok: boolean; error?: string }> {
-    const normalized = normalizeProxyUrl(proxyUrl);
-    if (!normalized || !this.state.proxies[normalized]) {
-      return { ok: false, error: "Proxy not found" };
-    }
-
-    // Remove old binding if exists
-    const oldProxy = this.state.sso_assignments[sso];
-    if (oldProxy && this.state.proxies[oldProxy]) {
-      const oldInfo = this.state.proxies[oldProxy]!;
-      oldInfo.assigned_sso = oldInfo.assigned_sso.filter((s) => s !== sso);
-    }
-
-    // Create new binding
-    this.state.sso_assignments[sso] = normalized;
-    this.state.proxies[normalized]!.assigned_sso.push(sso);
-    await this.addD1Binding(sso, normalized);
-    await this.persist();
-    return { ok: true };
+  async unassignFromSso(sso: string): Promise<{ success: boolean; message: string }> {
+    const url = this.sso_assignments.get(sso);
+    if (!url) return { success: false, message: "SSO未绑定代理" };
+    const p = this.proxies.get(url);
+    if (p) { p.assigned_sso = p.assigned_sso.filter((s) => s !== sso); await this._persistD1(p); }
+    this.sso_assignments.delete(sso);
+    await this._unbindD1(sso);
+    await this._persist();
+    return { success: true, message: "解绑成功" };
   }
 
-  async unassignFromSso(sso: string): Promise<void> {
-    const proxyUrl = this.state.sso_assignments[sso];
-    if (proxyUrl && this.state.proxies[proxyUrl]) {
-      const proxy = this.state.proxies[proxyUrl]!;
-      proxy.assigned_sso = proxy.assigned_sso.filter((s) => s !== sso);
+  async getProxyForSso(sso: string): Promise<string | null> {
+    if (sso && this.sso_assignments.has(sso)) {
+      const url = this.sso_assignments.get(sso)!;
+      const p = this.proxies.get(url);
+      if (p && p.healthy) return url;
+      await this.unassignFromSso(sso);
     }
-    delete this.state.sso_assignments[sso];
-    await this.removeD1Binding(sso);
-    await this.persist();
+    const sel = this._selectRoundRobin();
+    if (sso && sel) await this.assignToSso(sel, sso);
+    return sel;
   }
 
-  private getHealthyProxies(): ProxyInfo[] {
-    return Object.values(this.state.proxies).filter((p) => p.healthy);
-  }
-
-  private selectRoundRobin(): string | null {
-    const healthy = this.getHealthyProxies();
+  private _selectRoundRobin(): string | null {
+    const healthy = [...this.proxies.values()].filter((p) => p.healthy);
     if (!healthy.length) return null;
-    this.state.round_robin_index = (this.state.round_robin_index + 1) % healthy.length;
-    return healthy[this.state.round_robin_index]!.url;
-  }
-
-  getProxyForSso(sso: string): string | null {
-    if (!this.state.enabled) return null;
-
-    const bound = this.state.sso_assignments[sso];
-    if (bound && this.state.proxies[bound]?.healthy) {
-      return bound;
-    }
-
-    // Unbind if unhealthy
-    if (bound && this.state.proxies[bound] && !this.state.proxies[bound]!.healthy) {
-      delete this.state.sso_assignments[sso];
-      this.state.proxies[bound]!.assigned_sso = this.state.proxies[bound]!.assigned_sso.filter(
-        (s) => s !== sso,
-      );
-      void this.removeD1Binding(sso);
-    }
-
-    // Auto-assign via round-robin
-    const selected = this.selectRoundRobin();
-    if (selected) {
-      this.state.sso_assignments[sso] = selected;
-      this.state.proxies[selected]!.assigned_sso.push(sso);
-      void this.addD1Binding(sso, selected);
-      void this.persist();
-      return selected;
-    }
-
-    return null;
+    this.round_robin_index = this.round_robin_index % healthy.length;
+    const sel = healthy[this.round_robin_index]!.url;
+    this.round_robin_index++;
+    const p = this.proxies.get(sel)!;
+    p.last_used = nowMs();
+    p.total_requests++;
+    void this._persistD1(p);
+    void this._persist();
+    return sel;
   }
 
   getRandomProxy(): string | null {
-    if (!this.state.enabled) return null;
-    const healthy = this.getHealthyProxies();
-    if (!healthy.length) return null;
-    const idx = Math.floor(Math.random() * healthy.length);
-    return healthy[idx]!.url;
+    const h = [...this.proxies.values()].filter((p) => p.healthy);
+    if (!h.length) return null;
+    return h[Math.floor(Math.random() * h.length)]!.url;
+  }
+
+  forceRefresh(): string | null { return this._selectRoundRobin(); }
+
+  async markFailure(proxyUrl: string): Promise<void> {
+    const n = normalizeProxy(proxyUrl);
+    const p = this.proxies.get(n);
+    if (!p) return;
+    p.fail_count++;
+    if (p.fail_count >= MAX_FAIL_COUNT) {
+      p.healthy = false;
+      for (const sso of [...p.assigned_sso]) { this.sso_assignments.delete(sso); await this._unbindD1(sso); }
+      p.assigned_sso = [];
+    }
+    await this._persistD1(p);
+    await this._persist();
   }
 
   async markSuccess(proxyUrl: string): Promise<void> {
-    const proxy = this.state.proxies[proxyUrl];
-    if (!proxy) return;
-    proxy.fail_count = 0;
-    proxy.success_requests += 1;
-    proxy.total_requests += 1;
-    proxy.last_used = nowMs();
-    if (!proxy.healthy) {
-      proxy.healthy = true;
-    }
-    await this.persistToD1(proxy);
-    await this.persist();
+    const n = normalizeProxy(proxyUrl);
+    const p = this.proxies.get(n);
+    if (!p) return;
+    p.fail_count = 0;
+    p.success_requests++;
+    if (!p.healthy) p.healthy = true;
+    await this._persistD1(p);
+    await this._persist();
   }
 
-  async markFailure(proxyUrl: string): Promise<void> {
-    const proxy = this.state.proxies[proxyUrl];
-    if (!proxy) return;
-    proxy.fail_count += 1;
-    proxy.total_requests += 1;
-    proxy.last_used = nowMs();
+  async resetHealth(proxyUrl: string): Promise<void> {
+    const n = normalizeProxy(proxyUrl);
+    const p = this.proxies.get(n);
+    if (!p) return;
+    p.fail_count = 0;
+    p.healthy = true;
+    await this._persistD1(p);
+    await this._persist();
+  }
 
-    if (proxy.fail_count >= MAX_FAIL_COUNT) {
-      proxy.healthy = false;
-      // Unbind all SSOs from this proxy
-      for (const sso of [...proxy.assigned_sso]) {
-        delete this.state.sso_assignments[sso];
-        await this.removeD1Binding(sso);
+  async resetAllHealth(): Promise<void> {
+    for (const p of this.proxies.values()) { p.fail_count = 0; p.healthy = true; await this._persistD1(p); }
+    await this._persist();
+  }
+
+  getAllProxies(): ProxyInfo[] { return [...this.proxies.values()]; }
+  getSsoAssignments(): Record<string, string> { return Object.fromEntries(this.sso_assignments); }
+  isEnabled(): boolean { return this.proxies.size > 0; }
+
+  async testProxy(url: string): Promise<{ success: boolean; message: string; status_code?: number; response_time?: number }> {
+    const n = normalizeProxy(url);
+    const start = Date.now();
+    const testUrl = "https://grok.com";
+    try {
+      if (isSocksProxy(n)) {
+        const resp = await fetchViaSocks5(n, testUrl, { method: "GET", headers: { "User-Agent": "Mozilla/5.0" }, timeoutMs: 15000 });
+        const elapsed = Math.round((Date.now() - start) / 10) / 100;
+        if (resp.status === 200 || resp.status === 403) {
+          return { success: true, message: resp.status === 403 ? "代理连通正常（403表示被CF拦截，但代理可用）" : "代理连通正常", status_code: resp.status, response_time: elapsed };
+        }
+        return { success: false, message: `代理返回异常状态码: ${resp.status}`, status_code: resp.status, response_time: elapsed };
+      } else if (n.startsWith("http://") || n.startsWith("https://")) {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 15000);
+        try {
+          const resp = await fetch(n, { method: "HEAD", signal: ctrl.signal });
+          clearTimeout(t);
+          const elapsed = Math.round((Date.now() - start) / 10) / 100;
+          return { success: true, message: `代理可连接 (HTTP ${resp.status})`, status_code: resp.status, response_time: elapsed };
+        } catch (e: any) {
+          clearTimeout(t);
+          const elapsed = Math.round((Date.now() - start) / 10) / 100;
+          return { success: false, message: `代理连接失败: ${e?.message || e}`, response_time: elapsed };
+        }
       }
-      proxy.assigned_sso = [];
+      return { success: false, message: "不支持的代理类型" };
+    } catch (e: any) {
+      const elapsed = Math.round((Date.now() - start) / 10) / 100;
+      const msg = String(e?.message || e);
+      if (msg.includes("timeout") || msg.includes("abort")) return { success: false, message: "代理连接超时", response_time: elapsed };
+      if (msg.includes("refused")) return { success: false, message: "代理连接被拒绝", response_time: elapsed };
+      return { success: false, message: `代理连接失败: ${msg}`, response_time: elapsed };
     }
-
-    await this.persistToD1(proxy);
-    await this.persist();
-  }
-
-  async forceRefresh(): Promise<string | null> {
-    // Try to get a new random proxy from healthy pool
-    const proxy = this.selectRoundRobin();
-    if (proxy) return proxy;
-
-    // If no healthy proxies, try to restore all to healthy
-    for (const p of Object.values(this.state.proxies)) {
-      p.healthy = true;
-      p.fail_count = 0;
-      await this.persistToD1(p);
-    }
-    await this.persist();
-    return this.selectRoundRobin();
-  }
-
-  async resetHealth(): Promise<void> {
-    for (const proxy of Object.values(this.state.proxies)) {
-      proxy.healthy = true;
-      proxy.fail_count = 0;
-      await this.persistToD1(proxy);
-    }
-    await this.persist();
   }
 
   async clearAll(): Promise<void> {
     await dbRun(this.env.DB, "DELETE FROM proxy_sso_bindings", []);
     await dbRun(this.env.DB, "DELETE FROM proxy_pool", []);
     await this.env.KV_CACHE.delete(PROXY_STATE_KV_KEY);
-    this.state = {
-      proxies: {},
-      sso_assignments: {},
-      round_robin_index: 0,
-      enabled: false,
-    };
+    this.proxies.clear();
+    this.sso_assignments.clear();
+    this.round_robin_index = 0;
   }
 }
 
@@ -375,7 +306,6 @@ export async function getProxyPool(env: Env): Promise<ProxyPool> {
   return _poolInstance;
 }
 
-// For testing/reset purposes
 export function resetProxyPoolInstance(): void {
   _poolInstance = null;
 }
