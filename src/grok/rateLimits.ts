@@ -1,6 +1,7 @@
 import type { GrokSettings } from "../settings";
 import { getDynamicHeaders } from "./headers";
 import { toRateLimitModel } from "./models";
+import { fetchViaSocks5, isSocksProxy } from "../proxy/socks5";
 
 const RATE_LIMIT_API = "https://grok.com/rest/rate-limits";
 
@@ -15,23 +16,21 @@ export async function checkRateLimits(
   headers.Cookie = cookie;
   const body = JSON.stringify({ requestKind: "DEFAULT", modelName: rateModel });
 
-  let targetUrl = RATE_LIMIT_API;
-  if (proxyUrl) {
-    const p = proxyUrl.replace(/\/+$/, "");
-    const proxyUrlObj = new URL(p);
-    if (proxyUrlObj.pathname !== "/" && proxyUrlObj.pathname !== "") {
-      targetUrl = `${p}?url=${encodeURIComponent(RATE_LIMIT_API)}`;
-    } else {
-      const t = new URL(RATE_LIMIT_API);
-      t.hostname = proxyUrlObj.hostname;
-      t.port = proxyUrlObj.port;
-      t.protocol = proxyUrlObj.protocol;
-      targetUrl = t.toString();
-    }
+  const p = proxyUrl ? proxyUrl.trim().replace(/\/+$/, "").replace(/^socks5:\/\//, "socks5h://") : undefined;
+
+  let resp: Response;
+  if (p && isSocksProxy(p)) {
+    resp = await fetchViaSocks5(p, RATE_LIMIT_API, { method: "POST", headers, body, timeoutMs: 15000 });
+  } else if (p && (p.startsWith("http://") || p.startsWith("https://"))) {
+    resp = await fetch(p, {
+      method: "POST",
+      headers: { ...headers, "X-Target-URL": RATE_LIMIT_API },
+      body,
+    });
+  } else {
+    resp = await fetch(RATE_LIMIT_API, { method: "POST", headers, body });
   }
 
-  const resp = await fetch(targetUrl, { method: "POST", headers, body });
   if (!resp.ok) return null;
   return (await resp.json()) as Record<string, unknown>;
 }
-

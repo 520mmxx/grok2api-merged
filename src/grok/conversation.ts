@@ -1,6 +1,7 @@
 import type { GrokSettings } from "../settings";
 import { getDynamicHeaders } from "./headers";
 import { getModelInfo, toGrokModel } from "./models";
+import { fetchViaSocks5, isSocksProxy, isHttpProxy } from "../proxy/socks5";
 
 export interface OpenAIChatMessage {
   role: string;
@@ -166,40 +167,45 @@ export interface SendRequestOpts {
   proxyUrl?: string;
 }
 
-function resolveTargetUrl(proxyUrl: string | undefined, apiEndpoint: string): string {
-  if (!proxyUrl) return apiEndpoint;
-  // If proxy URL is set, route through it.
-  // Pattern A: proxy is a URL gateway: http://proxy:port/{target_url}
-  // Pattern B: proxy is the base URL: http://proxy:port -> http://proxy:port/rest/...
-  const p = proxyUrl.replace(/\/+$/, "");
-
-  // If proxy looks like a gateway (contains the full target or uses special scheme)
-  if (p.includes("://") && !p.endsWith("/rest/app-chat/conversations/new")) {
-    // Treat as a gateway that forwards to the target
-    // Gateway pattern: https://gateway.com/proxy?url={encoded_target}
-    // We check if the proxy URL already has path that suggests it's a gateway
-    const proxyUrlObj = new URL(p);
-    if (proxyUrlObj.pathname !== "/" && proxyUrlObj.pathname !== "") {
-      // It's a full gateway URL, append target as query param
-      return `${p}?url=${encodeURIComponent(apiEndpoint)}`;
-    }
-    // Simple base URL: use proxy as the origin for the API endpoint
-    const targetUrl = new URL(apiEndpoint);
-    targetUrl.hostname = proxyUrlObj.hostname;
-    targetUrl.port = proxyUrlObj.port;
-    targetUrl.protocol = proxyUrlObj.protocol;
-    return targetUrl.toString();
-  }
-  return apiEndpoint;
+/**
+ * Normalize proxy URL: socks5 -> socks5h, remove trailing slashes
+ */
+function normalizeProxyUrl(url: string): string {
+  let u = url.trim().replace(/\/+$/, "");
+  if (u.startsWith("socks5://")) u = "socks5h://" + u.slice("socks5://".length);
+  return u;
 }
 
 export async function sendConversationRequest(args: SendRequestOpts): Promise<Response> {
-  const { payload, cookie, settings, referer, proxyUrl } = args;
+  const { payload, cookie, settings, referer } = args;
+  const proxyUrl = args.proxyUrl ? normalizeProxyUrl(args.proxyUrl) : undefined;
   const headers = getDynamicHeaders(settings, "/rest/app-chat/conversations/new");
   headers.Cookie = cookie;
   if (referer) headers.Referer = referer;
   const body = JSON.stringify(payload);
 
-  const targetUrl = resolveTargetUrl(proxyUrl, CONVERSATION_API);
-  return fetch(targetUrl, { method: "POST", headers, body });
+  if (proxyUrl && isSocksProxy(proxyUrl)) {
+    // SOCKS5 proxy: use connect() API with raw HTTP/1.1 client
+    return fetchViaSocks5(proxyUrl, CONVERSATION_API, {
+      method: "POST",
+      headers,
+      body,
+      timeoutMs: (settings.stream_total_timeout ?? 600) * 1000,
+    });
+  }
+
+  if (proxyUrl && isHttpProxy(proxyUrl)) {
+    // HTTP/HTTPS proxy: fetch through the proxy directly
+    return fetch(proxyUrl, {
+      method: "POST",
+      headers: {
+        ...headers,
+        "X-Target-URL": CONVERSATION_API,
+      },
+      body,
+    });
+  }
+
+  // No proxy: direct request
+  return fetch(CONVERSATION_API, { method: "POST", headers, body });
 }

@@ -1,4 +1,4 @@
-name = "grok2api"
+name = "grok2apius"
 main = "src/index.ts"
 compatibility_date = "2026-01-28"
 
@@ -12,15 +12,13 @@ region = "aws:us-east-1"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "grok2api"
-# Filled by CI / your first deployment bootstrap.
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_name = "grok2apius"
+database_id = "0a877a22-c039-4779-ab71-1b48839dfcbb"
 migrations_dir = "migrations"
 
 [[kv_namespaces]]
 binding = "KV_CACHE"
-# Filled by CI / your first deployment bootstrap.
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "70c2e3739db0472f88af4215f1ae5db3"
 
 # Durable Objects migrations history:
 # - do-v1 created AutoRegisterJob (now removed)
@@ -49,7 +47,7 @@ KV_CLEANUP_BATCH = "200"
 
 # Proxy pool: comma-separated proxy URLs for quick bootstrap (e.g. "http://ip1:port,http://ip2:port")
 # Supports http://, https://, socks5://, socks5h:// schemes
-PROXY_URLS = ""
+PROXY_URLS = "socks5h://ygli62559-region-US-st-Colorado:mm000852@us.lajiaohttp.net:2000"
 
 # Proxy pool: external pool API URL for dynamic proxy fetching (returns a single proxy URL per call)
 PROXY_POOL_URL = ""
